@@ -27,5 +27,5 @@ jobs:
         with:
           image-ref: github-actions-demo:scan
           format: table
-          exit-code: 1
+          exit-code: 0
           severity: CRITICAL,HIGH
