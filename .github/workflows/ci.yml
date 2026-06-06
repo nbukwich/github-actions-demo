@@ -1,4 +1,4 @@
-name: CI - Python Tests
+name: CI - Test and Docker Build
 
 on:
   push:
@@ -25,3 +25,15 @@ jobs:
 
       - name: Run tests
         run: python -m pytest
+
+  docker-build:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t github-actions-demo:latest .
