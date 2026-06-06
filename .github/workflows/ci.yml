@@ -1,17 +1,22 @@
-name: CI - Quality Gates Docker Build and Publish
+name: Demo Pipeline - CI Security Docker Publish
 
 on:
   push:
     branches: ["main"]
+    tags: ["v*"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * 0"
 
 permissions:
   contents: read
   packages: write
+  pull-requests: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: demo-pipeline-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -19,7 +24,7 @@ env:
 
 jobs:
   quality:
-    name: Quality gate - Python ${{ matrix.python-version }}
+    name: Quality Gate - Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -40,20 +45,62 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run linting
+      - name: Lint with Ruff
         run: ruff check .
 
-      - name: Run tests with coverage
+      - name: Run tests with coverage gate
         run: python -m pytest --cov=app --cov-report=term-missing --cov-fail-under=80
 
-  docker-build:
-    name: Build and publish Docker image
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v4
+
+  container:
+    name: Build Scan and Publish Container
     runs-on: ubuntu-latest
     needs: quality
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t github-actions-demo:scan \
+            -t $IMAGE_NAME:latest \
+            -t $IMAGE_NAME:${{ github.sha }} \
+            .
+
+      - name: Trivy container vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: github-actions-demo:scan
+          format: table
+          exit-code: 0
+          severity: CRITICAL,HIGH
+
+      - name: Generate SBOM
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: github-actions-demo:scan
+          format: cyclonedx
+          output: sbom.cdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-sbom
+          path: sbom.cdx.json
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
@@ -63,15 +110,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Docker image
-        run: |
-          docker build \
-            -t $IMAGE_NAME:latest \
-            -t $IMAGE_NAME:${{ github.sha }} \
-            .
-
-      - name: Push Docker image
+      - name: Push Docker image to GHCR
         if: github.event_name != 'pull_request'
         run: |
           docker push $IMAGE_NAME:latest
           docker push $IMAGE_NAME:${{ github.sha }}
+
+  smoke-test:
+    name: Smoke Test Container
+    runs-on: ubuntu-latest
+    needs: container
+
+    steps:
+      - name: Run container locally
+        run: |
+          docker run -d -p 8000:8000 --name demo-api $IMAGE_NAME:${{ github.sha }} || \
+          docker run -d -p 8000:8000 --name demo-api github-actions-demo:scan
+
+      - name: Check health endpoint
+        run: |
+          sleep 5
+          curl --fail http://localhost:8000/health
