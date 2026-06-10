@@ -1,4 +1,4 @@
-\# GitHub Actions Enterprise CI/CD Demo
+\# GitHub Actions Enterprise CI/CD Demo.
 
 
 
